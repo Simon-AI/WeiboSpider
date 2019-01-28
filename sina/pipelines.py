@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import pymongo
 from pymongo.errors import DuplicateKeyError
-from sina.items import RelationshipsItem, TweetsItem, InformationItem, CommentItem
+from sina.items import RelationshipsItem, TweetsItem, InformationItem
 from sina.settings import LOCAL_MONGO_HOST, LOCAL_MONGO_PORT, DB_NAME
 
 
@@ -22,8 +22,6 @@ class MongoDBPipeline(object):
             self.insert_item(self.Tweets, item)
         elif isinstance(item, InformationItem):
             self.insert_item(self.Information, item)
-        elif isinstance(item, CommentItem):
-            self.insert_item(self.Comments, item)
         return item
 
     @staticmethod
