@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # encoding: utf-8
+import pymongo
 import re
 from lxml import etree
 from scrapy import Spider
@@ -7,7 +8,8 @@ from scrapy.crawler import CrawlerProcess
 from scrapy.selector import Selector
 from scrapy.http import Request
 from scrapy.utils.project import get_project_settings
-from sina.items import TweetsItem, InformationItem, RelationshipsItem, CommentItem
+from sina.items import TweetsItem, InformationItem, RelationshipsItem
+from sina.settings import DB_NAME, LOCAL_MONGO_HOST, LOCAL_MONGO_PORT
 from sina.spiders.utils import time_fix
 import time
 
@@ -18,8 +20,7 @@ class WeiboSpider(Spider):
 
     def start_requests(self):
         start_uids = [
-            '2803301701',  # 人民日报
-            '1699432410'  # 新华社
+            '2803301701'  # 人民日报
         ]
         for uid in start_uids:
             yield Request(url="https://weibo.cn/%s/info" % uid, callback=self.parse_information)
@@ -98,6 +99,22 @@ class WeiboSpider(Spider):
                       callback=self.parse_fans,
                       dont_filter=True)
 
+        # 自己写
+        client = pymongo.MongoClient(LOCAL_MONGO_HOST, LOCAL_MONGO_PORT)
+        db = client[DB_NAME]
+        infouid = []
+        useuid = []
+        for a in db["Information"].find():
+            infouid.append(a['_id'])
+        for b in db["Relationships"].find():
+            useuid.append(b['fan_id'])
+            useuid.append(b['followed_id'])
+        useuid.extend(infouid)
+        suids = sorted(set(useuid), key=useuid.index)
+        for uid in suids:
+            yield Request(url="https://weibo.cn/%s/info" % uid, callback=self.parse_information)
+
+
     def parse_tweet(self, response):
         if response.url.endswith('page=1'):
             # 如果是第1页，一次性获取后面的所有页
@@ -152,10 +169,6 @@ class WeiboSpider(Spider):
                     all_content = tweet_content_node.xpath('string(.)').replace('\u200b', '').strip()
                     tweet_item['content'] = all_content
                     yield tweet_item
-
-                # 抓取该微博的评论信息
-                comment_url = self.base_url + '/comment/' + tweet_item['weibo_url'].split('/')[-1] + '?page=1'
-                yield Request(url=comment_url, callback=self.parse_comment, meta={'weibo_url': tweet_item['weibo_url']})
 
             except Exception as e:
                 self.logger.error(e)
@@ -218,33 +231,6 @@ class WeiboSpider(Spider):
             relationships_item["followed_id"] = ID
             relationships_item["_id"] = uid + '-' + ID
             yield relationships_item
-
-    def parse_comment(self, response):
-        # 如果是第1页，一次性获取后面的所有页
-        if response.url.endswith('page=1'):
-            all_page = re.search(r'/>&nbsp;1/(\d+)页</div>', response.text)
-            if all_page:
-                all_page = all_page.group(1)
-                all_page = int(all_page)
-                for page_num in range(2, all_page + 1):
-                    page_url = response.url.replace('page=1', 'page={}'.format(page_num))
-                    yield Request(page_url, self.parse_comment, dont_filter=True, meta=response.meta)
-        selector = Selector(response)
-        comment_nodes = selector.xpath('//div[@class="c" and contains(@id,"C_")]')
-        for comment_node in comment_nodes:
-            comment_user_url = comment_node.xpath('.//a[contains(@href,"/u/")]/@href').extract_first()
-            if not comment_user_url:
-                continue
-            comment_item = CommentItem()
-            comment_item['crawl_time'] = int(time.time())
-            comment_item['weibo_url'] = response.meta['weibo_url']
-            comment_item['comment_user_id'] = re.search(r'/u/(\d+)', comment_user_url).group(1)
-            comment_item['content'] = comment_node.xpath('.//span[@class="ctt"]').xpath('string(.)').extract_first()
-            comment_item['_id'] = comment_node.xpath('./@id').extract_first()
-            created_at = comment_node.xpath('.//span[@class="ct"]/text()').extract_first()
-            comment_item['created_at'] = time_fix(created_at.split('\xa0')[0])
-            yield comment_item
-
 
 if __name__ == "__main__":
     process = CrawlerProcess(get_project_settings())
